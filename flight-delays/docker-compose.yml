@@ -1,0 +1,59 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: flights
+    ports:
+      # 5432 is often taken by a local Postgres; map host 5433 -> container 5432
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      # Paths are relative to this compose file. ``environment:`` below still wins on conflicts (e.g. DATABASE_URL).
+      - path: ../.env
+        required: false
+      - path: .env
+        required: false
+    ports:
+      - "8001:8000"
+    environment:
+      # Must override host-only values from .env so the container keeps talking to the compose network.
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/flights
+      OPENSKY_USERNAME: ""
+      OPENSKY_PASSWORD: ""
+      MODEL_PATH: /app/models
+      BTS_DATA_PATH: /app/data/bts
+      LOG_LEVEL: INFO
+      ADMIN_KEY: change-me-to-a-secure-key
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - model_data:/app/models
+      - bts_data:/app/data/bts
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3001:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  model_data:
+  bts_data:
