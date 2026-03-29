@@ -4,14 +4,12 @@ import useGlobeStore from '../stores/globeStore';
 import { useIsNarrowLayout } from '../hooks/useMediaQuery';
 import { delayLevelToColor } from '../utils/colorScale';
 
-/** Canvas scale on narrow viewports — smaller globe, centered with margin around canvas edges. */
-const MOBILE_GLOBE_SCALE = 0.74;
-
 const GLOBE_IMAGE = '//cdn.jsdelivr.net/npm/three-globe/example/img/earth-night.jpg';
 const BG_COLOR = '#0a0f1e';
 const ARC_OPACITY = 0.2;
 const SOLO_ARC_BASE_STROKE = 0.42;
 const SOLO_ARC_HIGHLIGHT_STROKE = 0.64;
+const MOBILE_DEFAULT_ALTITUDE = 3.8;
 
 /** Deterministic phase in [0, 1) for dash offset — avoids Math.random per arc per frame. */
 function arcDashPhase(origin, destination) {
@@ -54,9 +52,13 @@ export default function Globe() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  const globeScale = narrow ? MOBILE_GLOBE_SCALE : 1;
-  const globeWidth = Math.max(1, Math.round(viewport.w * globeScale));
-  const globeHeight = Math.max(1, Math.round(viewport.h * globeScale));
+  useEffect(() => {
+    if (!globeReady || !narrow) return;
+    const globe = globeRef.current;
+    if (!globe) return;
+    if (selectedAirport || selectedRoute) return;
+    globe.pointOfView({ lat: -10, lng: 0, altitude: MOBILE_DEFAULT_ALTITUDE }, 600);
+  }, [globeReady, narrow]);
 
   const arcsData = useMemo(() => {
     /** Solo selection: draw a thin base arc plus animated highlight in same delay color. */
@@ -133,10 +135,10 @@ export default function Globe() {
     const globe = globeRef.current;
     if (!globe || !selectedAirport) return;
     globe.pointOfView(
-      { lat: selectedAirport.lat, lng: selectedAirport.lon, altitude: 1.5 },
+      { lat: selectedAirport.lat, lng: selectedAirport.lon, altitude: narrow ? 2.4 : 1.5 },
       1000
     );
-  }, [selectedAirport]);
+  }, [selectedAirport, narrow]);
 
   useEffect(() => {
     const globe = globeRef.current;
@@ -157,7 +159,8 @@ export default function Globe() {
     const dLat = Math.abs(selectedRoute.origin_lat - selectedRoute.dest_lat);
     const dLng = Math.abs(selectedRoute.origin_lon - selectedRoute.dest_lon);
     const span = Math.max(dLat, dLng);
-    const altitude = span > 100 ? 2.2 : span > 50 ? 1.8 : 1.4;
+    let altitude = span > 100 ? 2.2 : span > 50 ? 1.8 : 1.4;
+    if (narrow) altitude += 0.8;
 
     globe.pointOfView({ lat: midLat, lng: midLng, altitude }, 1300);
     globe.controls().autoRotate = false;
@@ -171,87 +174,75 @@ export default function Globe() {
   );
 
   return (
-    <div
-      style={{
-        position: 'absolute',
-        inset: 0,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: BG_COLOR,
-        zIndex: 0,
-      }}
-    >
-      <ReactGlobe
-        ref={globeRef}
-        onGlobeReady={() => setGlobeReady(true)}
-        globeImageUrl={GLOBE_IMAGE}
-        backgroundColor={BG_COLOR}
-        atmosphereColor="#1e40af"
-        atmosphereAltitude={0.15}
-        pointsData={airports}
-        pointLat="lat"
-        pointLng="lon"
-        pointColor={() => 'orange'}
-        pointAltitude={0}
-        pointRadius={narrow ? 0.026 : 0.02}
-        pointsMerge={true}
-        pointLabel={(d) =>
-          `<div style="text-align:center;font-family:Inter,sans-serif;font-size:12px;">
+    <ReactGlobe
+      ref={globeRef}
+      onGlobeReady={() => setGlobeReady(true)}
+      globeImageUrl={GLOBE_IMAGE}
+      backgroundColor={BG_COLOR}
+      atmosphereColor="#1e40af"
+      atmosphereAltitude={0.15}
+      pointsData={airports}
+      pointLat="lat"
+      pointLng="lon"
+      pointColor={() => 'orange'}
+      pointAltitude={0}
+      pointRadius={0.02}
+      pointsMerge={true}
+      pointLabel={(d) =>
+        `<div style="text-align:center;font-family:Inter,sans-serif;font-size:12px;">
           <b style="font-size:14px;">${d.iata}</b><br/>
           <span style="color:#9ca3af;">${d.name || ''}</span>
         </div>`
+      }
+      onPointClick={handlePointClick}
+      arcsData={arcsData}
+      arcStartLat="startLat"
+      arcStartLng="startLng"
+      arcEndLat="endLat"
+      arcEndLng="endLng"
+      arcColor={(d) => {
+        if (d.__solo) {
+          const alpha = d.__soloLayer === 'highlight' ? 0.98 : 0.62;
+          const c = delayLevelToColor(d.delay_level, alpha);
+          const tail = delayLevelToColor(d.delay_level, d.__soloLayer === 'highlight' ? 0.2 : 0.1);
+          return [c, tail];
         }
-        onPointClick={handlePointClick}
-        arcsData={arcsData}
-        arcStartLat="startLat"
-        arcStartLng="startLng"
-        arcEndLat="endLat"
-        arcEndLng="endLng"
-        arcColor={(d) => {
-          if (d.__solo) {
-            const alpha = d.__soloLayer === 'highlight' ? 0.98 : 0.62;
-            const c = delayLevelToColor(d.delay_level, alpha);
-            const tail = delayLevelToColor(d.delay_level, d.__soloLayer === 'highlight' ? 0.2 : 0.1);
-            return [c, tail];
-          }
-          return [
-            delayLevelToColor(d.delay_level, ARC_OPACITY * 0.5),
-            delayLevelToColor(d.delay_level, ARC_OPACITY + 0.55),
-          ];
-        }}
-        arcStroke={(d) => {
-          if (!d.__solo) return 0.35;
-          return d.__soloLayer === 'highlight' ? SOLO_ARC_HIGHLIGHT_STROKE : SOLO_ARC_BASE_STROKE;
-        }}
-        arcCurveResolution={32}
-        arcDashLength={(d) => {
-          if (!d.__solo) return 0.28;
-          return d.__soloLayer === 'highlight' ? 0.16 : 1;
-        }}
-        arcDashGap={(d) => {
-          if (!d.__solo) return 1;
-          return d.__soloLayer === 'highlight' ? 0.26 : 0;
-        }}
-        arcDashInitialGap={(d) => {
-          if (!d.__solo) return arcDashPhase(d.origin, d.destination);
-          return d.__soloLayer === 'highlight' ? arcDashPhase(d.origin, d.destination) : 0;
-        }}
-        arcDashAnimateTime={(d) => {
-          if (!d.__solo) return 6800;
-          return d.__soloLayer === 'highlight' ? 1600 : 0;
-        }}
-        arcsTransitionDuration={0}
-        onArcClick={(arc) => setSelectedRoute(arc)}
-        arcLabel={(d) =>
-          `<div style="font-family:Inter,sans-serif;font-size:11px;">
+        return [
+          delayLevelToColor(d.delay_level, ARC_OPACITY * 0.5),
+          delayLevelToColor(d.delay_level, ARC_OPACITY + 0.55),
+        ];
+      }}
+      arcStroke={(d) => {
+        if (!d.__solo) return 0.35;
+        return d.__soloLayer === 'highlight' ? SOLO_ARC_HIGHLIGHT_STROKE : SOLO_ARC_BASE_STROKE;
+      }}
+      arcCurveResolution={32}
+      arcDashLength={(d) => {
+        if (!d.__solo) return 0.28;
+        return d.__soloLayer === 'highlight' ? 0.16 : 1;
+      }}
+      arcDashGap={(d) => {
+        if (!d.__solo) return 1;
+        return d.__soloLayer === 'highlight' ? 0.26 : 0;
+      }}
+      arcDashInitialGap={(d) => {
+        if (!d.__solo) return arcDashPhase(d.origin, d.destination);
+        return d.__soloLayer === 'highlight' ? arcDashPhase(d.origin, d.destination) : 0;
+      }}
+      arcDashAnimateTime={(d) => {
+        if (!d.__solo) return 6800;
+        return d.__soloLayer === 'highlight' ? 1600 : 0;
+      }}
+      arcsTransitionDuration={0}
+      onArcClick={(arc) => setSelectedRoute(arc)}
+      arcLabel={(d) =>
+        `<div style="font-family:Inter,sans-serif;font-size:11px;">
           ${d.origin} &#8594; ${d.destination}<br/>
           Delay level: ${d.delay_level || 'UNKNOWN'}
         </div>`
-        }
-        width={globeWidth}
-        height={globeHeight}
-      />
-    </div>
+      }
+      width={viewport.w}
+      height={viewport.h}
+    />
   );
 }
