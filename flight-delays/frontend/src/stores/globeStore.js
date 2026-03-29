@@ -73,7 +73,13 @@ const useGlobeStore = create((set, get) => ({
     });
   },
 
-  setSelectedRoute: (route) => set({ selectedRoute: route }),
+  setSelectedRoute: (route) =>
+    set({
+      selectedRoute: route,
+      selectedAirport: null,
+      selectedAirportRoutes: [],
+      selectedAirportFlights: [],
+    }),
   clearSelectedRoute: () => set({ selectedRoute: null }),
 }));
 

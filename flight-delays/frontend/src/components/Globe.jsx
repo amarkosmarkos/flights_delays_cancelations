@@ -6,6 +6,8 @@ import { delayLevelToColor } from '../utils/colorScale';
 const GLOBE_IMAGE = '//cdn.jsdelivr.net/npm/three-globe/example/img/earth-night.jpg';
 const BG_COLOR = '#0a0f1e';
 const ARC_OPACITY = 0.2;
+const SOLO_ARC_BASE_STROKE = 0.42;
+const SOLO_ARC_HIGHLIGHT_STROKE = 0.64;
 
 /** Deterministic phase in [0, 1) for dash offset — avoids Math.random per arc per frame. */
 function arcDashPhase(origin, destination) {
@@ -36,7 +38,7 @@ export default function Globe() {
   );
 
   const arcsData = useMemo(() => {
-    /** Solo selection: hide all other routes, one continuous arc colored by delay level. */
+    /** Solo selection: draw a thin base arc plus animated highlight in same delay color. */
     if (
       selectedRoute &&
       selectedRoute.origin_lat != null &&
@@ -44,14 +46,23 @@ export default function Globe() {
       selectedRoute.dest_lat != null &&
       selectedRoute.dest_lon != null
     ) {
+      const shared = {
+        ...selectedRoute,
+        startLat: selectedRoute.origin_lat,
+        startLng: selectedRoute.origin_lon,
+        endLat: selectedRoute.dest_lat,
+        endLng: selectedRoute.dest_lon,
+      };
       return [
         {
-          ...selectedRoute,
-          startLat: selectedRoute.origin_lat,
-          startLng: selectedRoute.origin_lon,
-          endLat: selectedRoute.dest_lat,
-          endLng: selectedRoute.dest_lon,
+          ...shared,
           __solo: true,
+          __soloLayer: 'base',
+        },
+        {
+          ...shared,
+          __solo: true,
+          __soloLayer: 'highlight',
         },
       ];
     }
@@ -167,20 +178,37 @@ export default function Globe() {
       arcEndLng="endLng"
       arcColor={(d) => {
         if (d.__solo) {
-          const c = delayLevelToColor(d.delay_level, 0.98);
-          return [c, c];
+          const alpha = d.__soloLayer === 'highlight' ? 0.98 : 0.62;
+          const c = delayLevelToColor(d.delay_level, alpha);
+          const tail = delayLevelToColor(d.delay_level, d.__soloLayer === 'highlight' ? 0.2 : 0.1);
+          return [c, tail];
         }
         return [
           delayLevelToColor(d.delay_level, ARC_OPACITY * 0.5),
           delayLevelToColor(d.delay_level, ARC_OPACITY + 0.55),
         ];
       }}
-      arcStroke={(d) => (d.__solo ? 1.25 : 0.35)}
+      arcStroke={(d) => {
+        if (!d.__solo) return 0.35;
+        return d.__soloLayer === 'highlight' ? SOLO_ARC_HIGHLIGHT_STROKE : SOLO_ARC_BASE_STROKE;
+      }}
       arcCurveResolution={32}
-      arcDashLength={(d) => (d.__solo ? 1 : 0.28)}
-      arcDashGap={(d) => (d.__solo ? 0 : 1)}
-      arcDashInitialGap={(d) => (d.__solo ? 0 : arcDashPhase(d.origin, d.destination))}
-      arcDashAnimateTime={(d) => (d.__solo ? 0 : 6800)}
+      arcDashLength={(d) => {
+        if (!d.__solo) return 0.28;
+        return d.__soloLayer === 'highlight' ? 0.16 : 1;
+      }}
+      arcDashGap={(d) => {
+        if (!d.__solo) return 1;
+        return d.__soloLayer === 'highlight' ? 0.26 : 0;
+      }}
+      arcDashInitialGap={(d) => {
+        if (!d.__solo) return arcDashPhase(d.origin, d.destination);
+        return d.__soloLayer === 'highlight' ? arcDashPhase(d.origin, d.destination) : 0;
+      }}
+      arcDashAnimateTime={(d) => {
+        if (!d.__solo) return 6800;
+        return d.__soloLayer === 'highlight' ? 1600 : 0;
+      }}
       arcsTransitionDuration={0}
       onArcClick={(arc) => setSelectedRoute(arc)}
       arcLabel={(d) =>

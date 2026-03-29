@@ -17,7 +17,13 @@ export default function usePrediction() {
         scheduled_departure: scheduledDeparture,
       });
       const res = await fetch(`${API_BASE}/api/predictions/${flightNumber}?${params}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        const d = body?.detail;
+        const msg =
+          typeof d === 'string' ? d : Array.isArray(d) ? d.map((x) => x.msg || JSON.stringify(x)).join('; ') : null;
+        throw new Error(msg || `HTTP ${res.status}`);
+      }
       const data = await res.json();
       setPrediction(data);
     } catch (err) {

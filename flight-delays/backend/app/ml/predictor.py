@@ -1,83 +1,75 @@
 import glob
-import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import joblib
 import numpy as np
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.airport import Airport
-from app.models.flight import AirportAggregate
+from app.models.flight import AirportAggregate, FlightRaw
 from app.models.model_metrics import ModelMetrics
 from app.ml.features import build_features
 from app.services.openmeteo import get_weather_features
-from app.schemas.prediction import PredictionOut, DataSourcesUsed
+from app.schemas.prediction import PredictionOut, DataSourcesUsed, ModelQuality
 
 logger = logging.getLogger(__name__)
 
 
 class FlightPredictor:
     def __init__(self):
-        self.models: dict[str, dict] = {}
-        self.model_versions: dict[str, str] = {}
-        self.fallback_region = "US"
+        self.cancel_model = None
+        self.delay_model = None
+        self.model_version: str | None = None
+        self._cached_quality: ModelQuality | None = None
 
-    def load_models(self) -> None:
-        """Load the latest active model per region from MODEL_PATH."""
+    def load_models(self) -> bool:
+        """Load the latest global models from MODEL_PATH. Returns True if loaded."""
         if not os.path.isdir(settings.MODEL_PATH):
             logger.warning("Model path %s does not exist", settings.MODEL_PATH)
-            return
+            return False
 
-        for region in ("US", "EU", "ASIA", "LATAM", "OTHER"):
-            cancel_files = sorted(glob.glob(
-                os.path.join(settings.MODEL_PATH, f"{region}_cancel_*.joblib")
-            ))
-            delay_files = sorted(glob.glob(
-                os.path.join(settings.MODEL_PATH, f"{region}_delay_*.joblib")
-            ))
+        cancel_files = sorted(glob.glob(
+            os.path.join(settings.MODEL_PATH, "global_cancel_*.joblib")
+        ))
+        delay_files = sorted(glob.glob(
+            os.path.join(settings.MODEL_PATH, "global_delay_*.joblib")
+        ))
 
-            if not cancel_files or not delay_files:
-                logger.info("No model files found for region %s", region)
-                continue
+        if not cancel_files or not delay_files:
+            logger.warning("No global model files found in %s", settings.MODEL_PATH)
+            return False
 
-            try:
-                cancel_model = joblib.load(cancel_files[-1])
-                delay_model = joblib.load(delay_files[-1])
-                self.models[region] = {"cancel": cancel_model, "delay": delay_model}
-                version = cancel_files[-1].rsplit("_", 1)[-1].replace(".joblib", "")
-                self.model_versions[region] = version
-                logger.info("Loaded models for region %s (version %s)", region, version)
-            except Exception as e:
-                logger.error("Failed to load models for region %s: %s", region, e)
+        try:
+            self.cancel_model = joblib.load(cancel_files[-1])
+            self.delay_model = joblib.load(delay_files[-1])
+            self.model_version = cancel_files[-1].rsplit("_", 1)[-1].replace(".joblib", "")
+            self._cached_quality = None
+            logger.info("Loaded global models (version %s)", self.model_version)
+            return True
+        except Exception as e:
+            logger.error("Failed to load global models: %s", e)
+            return False
+
+    @property
+    def models_loaded(self) -> bool:
+        return self.cancel_model is not None and self.delay_model is not None
 
     async def predict(self, flight: dict, db: AsyncSession) -> PredictionOut:
         origin_iata = flight.get("origin_iata", "")
         dest_iata = flight.get("destination_iata", "")
-        region = await self._get_region(origin_iata, db)
+        sched = flight.get("scheduled_departure") or datetime.now(timezone.utc)
 
-        fallback_used = False
-        fallback_reason = None
-        actual_region = region
-
-        if region not in self.models:
-            fallback_used = True
-            fallback_reason = (
-                f"No trained model for region '{region}' yet (insufficient historical data). "
-                f"Using {self.fallback_region} model as proxy."
+        if not self.models_loaded:
+            raise ValueError(
+                "No trained models loaded. Run `python -m scripts.train_models` first."
             )
-            actual_region = self.fallback_region
-
-        if actual_region not in self.models:
-            return self._no_model_response(flight, fallback_reason or "No models available")
 
         origin_airport = await self._get_airport(origin_iata, db)
         dest_airport = await self._get_airport(dest_iata, db)
-
-        sched = flight.get("scheduled_departure") or datetime.now(timezone.utc)
 
         weather_origin = await get_weather_features(
             origin_airport.get("lat", 0), origin_airport.get("lon", 0), sched,
@@ -91,52 +83,43 @@ class FlightPredictor:
         features = build_features(flight, weather_origin, weather_dest, historical_stats)
         features_2d = features.reshape(1, -1)
 
-        model_set = self.models[actual_region]
-
-        if hasattr(model_set["cancel"], "predict_proba"):
-            cancel_prob = float(model_set["cancel"].predict_proba(features_2d)[0][1])
+        if hasattr(self.cancel_model, "predict_proba"):
+            cancel_prob = float(self.cancel_model.predict_proba(features_2d)[0][1])
         else:
-            cancel_prob = float(model_set["cancel"].predict(features_2d)[0])
+            cancel_prob = float(self.cancel_model.predict(features_2d)[0])
 
-        delay_pred = float(model_set["delay"].predict(features_2d)[0])
+        delay_pred = self.delay_model.predict(features_2d)[0]
+        dep_delay = float(delay_pred[0])
+        arr_delay = float(delay_pred[1])
 
-        interval_low, interval_high = self._compute_interval(delay_pred, historical_stats)
+        interval_low, interval_high = self._compute_interval(dep_delay, historical_stats)
 
-        version = self.model_versions.get(actual_region, "unknown")
-        metrics = await self._get_model_metrics(actual_region, db)
-        training_samples = metrics.training_samples if metrics else 0
-        last_retrain = metrics.train_date.isoformat() if metrics and metrics.train_date else None
+        quality = await self.get_model_quality(db)
+
+        metrics_row = await self._get_active_metrics(db)
+        training_samples = metrics_row.training_samples if metrics_row else 0
+        last_retrain = metrics_row.train_date.isoformat() if metrics_row and metrics_row.train_date else None
 
         route_flights = historical_stats.get("route_flight_count", 0)
-        if route_flights > 500:
-            route_coverage = "high"
-        elif route_flights > 100:
-            route_coverage = "medium"
-        else:
-            route_coverage = "low"
+        route_coverage = self._coverage_label(route_flights)
 
         data_sources = DataSourcesUsed(
-            model=f"XGBoost — {actual_region} region",
+            model="XGBoost global (multi-output)",
             training_samples=training_samples,
-            historical_data="OpenSky Network + BTS on-time performance",
+            historical_data="BTS on-time performance",
             weather="Open-Meteo forecast API",
-            fallback=fallback_used,
-            fallback_reason=fallback_reason,
+            fallback=False,
+            fallback_reason=None,
             route_coverage=route_coverage,
             last_retrain=last_retrain,
             explanation_short=(
-                f"Evaluated using {actual_region} model"
-                f" · {training_samples:,} flights"
-                f" · Open-Meteo weather"
-                + (f" · FALLBACK from {region}" if fallback_used else "")
+                f"XGBoost global · {training_samples:,} training flights · Open-Meteo weather"
             ),
             explanation_full={
-                "model": f"XGBoost — {actual_region} region",
+                "model": "XGBoost global (RegressorChain dep→arr + calibrated classifier)",
                 "trained": f"{last_retrain} · {training_samples:,} flights",
-                "data": "OpenSky Network (inferred delays) + BTS historical",
                 "weather": "Open-Meteo forecast API",
-                "route": f"{route_coverage.capitalize()} coverage ({route_flights} historical flights)",
-                "fallback": fallback_reason if fallback_used else None,
+                "route": f"{route_coverage} coverage ({route_flights} flights)",
             },
         )
 
@@ -147,53 +130,48 @@ class FlightPredictor:
             airline_code=flight.get("airline_code"),
             scheduled_departure=sched,
             predicted_cancellation_probability=round(cancel_prob, 4),
-            predicted_delay_minutes=round(delay_pred, 1),
+            predicted_departure_delay_minutes=round(dep_delay, 1),
+            predicted_arrival_delay_minutes=round(arr_delay, 1),
+            predicted_delay_minutes=round(dep_delay, 1),
             prediction_interval_low=round(interval_low, 1),
             prediction_interval_high=round(interval_high, 1),
-            model_version=version,
-            model_region=actual_region,
+            model_version=self.model_version or "unknown",
+            model_region="GLOBAL",
             data_sources_used=data_sources,
-            fallback_used=fallback_used,
-            fallback_reason=fallback_reason,
+            model_quality=quality,
+            fallback_used=False,
+            fallback_reason=None,
         )
 
-    def _no_model_response(self, flight: dict, reason: str) -> PredictionOut:
-        return PredictionOut(
-            flight_number=flight.get("flight_number"),
-            origin_iata=flight.get("origin_iata"),
-            destination_iata=flight.get("destination_iata"),
-            airline_code=flight.get("airline_code"),
-            scheduled_departure=flight.get("scheduled_departure"),
-            predicted_cancellation_probability=None,
-            predicted_delay_minutes=None,
-            prediction_interval_low=None,
-            prediction_interval_high=None,
-            model_version=None,
-            model_region=None,
-            data_sources_used=DataSourcesUsed(
-                model=None,
-                fallback=True,
-                fallback_reason=reason,
-                explanation_short=f"No prediction available: {reason}",
-                explanation_full={"error": reason},
-            ),
-            fallback_used=True,
-            fallback_reason=reason,
+    async def get_model_quality(self, db: AsyncSession) -> ModelQuality | None:
+        if self._cached_quality is not None:
+            return self._cached_quality
+        row = await self._get_active_metrics(db)
+        if not row:
+            return None
+        self._cached_quality = ModelQuality(
+            delay_dep_mae=row.delay_dep_mae,
+            delay_dep_rmse=row.delay_dep_rmse,
+            delay_arr_mae=row.delay_arr_mae,
+            delay_arr_rmse=row.delay_arr_rmse,
+            cancellation_auc=row.cancellation_auc,
+            cancellation_brier=row.cancellation_brier,
+            test_samples=row.test_samples,
         )
+        return self._cached_quality
+
+    @staticmethod
+    def _coverage_label(route_flights: int) -> str:
+        if route_flights > 500:
+            return "high"
+        if route_flights > 100:
+            return "medium"
+        return "low"
 
     def _compute_interval(self, delay_pred: float, stats: dict) -> tuple[float, float]:
         std = stats.get("route_delay_std", 15.0) or 15.0
         margin = 1.5 * std
-        low = delay_pred - margin
-        high = delay_pred + margin
-        return max(low, -30), high
-
-    async def _get_region(self, iata: str, db: AsyncSession) -> str:
-        result = await db.execute(
-            select(Airport.region).where(Airport.iata_code == iata)
-        )
-        row = result.first()
-        return row[0] if row and row[0] else "OTHER"
+        return max(delay_pred - margin, -30), delay_pred + margin
 
     async def _get_airport(self, iata: str, db: AsyncSession) -> dict:
         result = await db.execute(
@@ -205,7 +183,7 @@ class FlightPredictor:
         return {"lat": 0, "lon": 0}
 
     async def _get_historical_stats(
-        self, origin_iata: str, dest_iata: str, db: AsyncSession
+        self, origin_iata: str, dest_iata: str, db: AsyncSession,
     ) -> dict:
         stats: dict = {
             "origin_avg_delay_7d": 0.0,
@@ -236,10 +214,6 @@ class FlightPredictor:
         if dest_row:
             stats["dest_avg_delay_7d"] = dest_row.avg_departure_delay_minutes or 0.0
 
-        from sqlalchemy import func
-        from app.models.flight import FlightRaw
-        from datetime import timedelta
-
         cutoff = datetime.now(timezone.utc) - timedelta(days=90)
         route_stats = await db.execute(
             select(
@@ -258,10 +232,10 @@ class FlightPredictor:
 
         return stats
 
-    async def _get_model_metrics(self, region: str, db: AsyncSession) -> ModelMetrics | None:
+    async def _get_active_metrics(self, db: AsyncSession) -> ModelMetrics | None:
         result = await db.execute(
             select(ModelMetrics)
-            .where(ModelMetrics.region == region, ModelMetrics.is_active == True)
+            .where(ModelMetrics.is_active == True)
             .order_by(ModelMetrics.train_date.desc())
             .limit(1)
         )

@@ -4,4 +4,6 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN mkdir -p /app/models /app/data/bts
 COPY . .
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Strip Windows CRLF so Linux can exec the script; invoke via sh to avoid shebang issues.
+RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh
+CMD ["sh", "/app/entrypoint.sh"]
