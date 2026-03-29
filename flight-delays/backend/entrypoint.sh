@@ -14,7 +14,7 @@ async def ping():
         await conn.execute(__import__('sqlalchemy').text('SELECT 1'))
     await engine.dispose()
 asyncio.run(ping())
-" 2>/dev/null; then
+"; then
         echo "    Database is ready."
         break
     fi
