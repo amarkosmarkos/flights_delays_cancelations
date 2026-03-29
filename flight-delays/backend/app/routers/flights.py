@@ -50,6 +50,26 @@ async def get_flights(
     result = await db.execute(stmt)
     flights = result.scalars().all()
 
+    # Fallback: if no upcoming flights exist (e.g. only historical BTS data),
+    # show the most recently scheduled flights for this airport.
+    if not flights:
+        if direction == "departures":
+            fallback_stmt = (
+                select(FlightRaw)
+                .where(FlightRaw.origin_iata == iata)
+                .order_by(FlightRaw.scheduled_departure.desc())
+                .limit(limit)
+            )
+        else:
+            fallback_stmt = (
+                select(FlightRaw)
+                .where(FlightRaw.destination_iata == iata)
+                .order_by(FlightRaw.scheduled_arrival.desc())
+                .limit(limit)
+            )
+        fallback_result = await db.execute(fallback_stmt)
+        flights = fallback_result.scalars().all()
+
     return [
         FlightOut(
             id=f.id,
