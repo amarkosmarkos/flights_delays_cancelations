@@ -8,6 +8,9 @@ RUN npm run build
 FROM nginx:alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/nginx.conf.template
-RUN rm -f /etc/nginx/conf.d/default.conf
+COPY entrypoint.sh /entrypoint.sh
+RUN rm -f /etc/nginx/conf.d/default.conf \
+  && sed -i 's/\r$//' /entrypoint.sh \
+  && chmod +x /entrypoint.sh
 EXPOSE 80
-CMD ["/bin/sh", "-c", "sed \"s/__PORT__/${PORT:-80}/g\" /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf && exec nginx -g 'daemon off;'"]
+CMD ["/entrypoint.sh"]
