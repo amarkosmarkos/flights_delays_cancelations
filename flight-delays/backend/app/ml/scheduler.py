@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -19,6 +20,8 @@ async def _poll_opensky():
     try:
         async with async_session_factory() as db:
             await service.poll_top_airports(db)
+    except asyncio.CancelledError:
+        logger.warning("OpenSky poll cancelled (network timeout or block) — server stays up")
     except Exception as e:
         logger.error("OpenSky poll failed: %s", e)
     finally:

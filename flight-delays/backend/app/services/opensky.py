@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from collections import Counter
@@ -48,6 +49,9 @@ class OpenSkyService:
             )
             resp.raise_for_status()
             return resp.json()
+        except asyncio.CancelledError:
+            logger.warning("OpenSky arrivals fetch cancelled for %s (timeout or network block)", icao)
+            return []
         except Exception as e:
             logger.warning("OpenSky arrivals fetch failed for %s: %s", icao, e)
             return []
@@ -60,6 +64,9 @@ class OpenSkyService:
             )
             resp.raise_for_status()
             return resp.json()
+        except asyncio.CancelledError:
+            logger.warning("OpenSky departures fetch cancelled for %s (timeout or network block)", icao)
+            return []
         except Exception as e:
             logger.warning("OpenSky departures fetch failed for %s: %s", icao, e)
             return []
