@@ -1,9 +1,11 @@
 import useGlobeStore from '../stores/globeStore';
+import { useIsNarrowLayout } from '../hooks/useMediaQuery';
 import FlightCard from './FlightCard';
 import { delayLevelToHex } from '../utils/colorScale';
 import { formatDelay, formatPct, formatNumber, formatRelative } from '../utils/formatters';
 
 export default function SidePanel() {
+  const narrow = useIsNarrowLayout();
   const selectedAirport = useGlobeStore((s) => s.selectedAirport);
   const flights = useGlobeStore((s) => s.selectedAirportFlights);
   const routes = useGlobeStore((s) => s.selectedAirportRoutes);
@@ -20,10 +22,12 @@ export default function SidePanel() {
         position: 'absolute',
         top: 0,
         right: 0,
-        width: 380,
+        width: narrow ? '100%' : 380,
+        maxWidth: narrow ? '100%' : undefined,
         height: '100%',
+        paddingBottom: narrow ? 'env(safe-area-inset-bottom)' : undefined,
         background: 'var(--color-surface)',
-        borderLeft: '1px solid var(--color-border)',
+        borderLeft: narrow ? 'none' : '1px solid var(--color-border)',
         display: 'flex',
         flexDirection: 'column',
         zIndex: 500,

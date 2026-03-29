@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import useGlobeStore from '../stores/globeStore';
+import { useIsNarrowLayout } from '../hooks/useMediaQuery';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -52,6 +53,7 @@ function AirportAutocompleteInput({
 }
 
 export default function RouteSearchBar() {
+  const narrow = useIsNarrowLayout();
   const setSelectedRoute = useGlobeStore((s) => s.setSelectedRoute);
   const clearSelectedRoute = useGlobeStore((s) => s.clearSelectedRoute);
 
@@ -148,24 +150,26 @@ export default function RouteSearchBar() {
     <div
       style={{
         position: 'absolute',
-        top: 14,
+        top: narrow ? 84 : 14,
         left: '50%',
         transform: 'translateX(-50%)',
         zIndex: 240,
-        width: 'min(820px, calc(100vw - 40px))',
+        width: narrow ? 'calc(100vw - 16px)' : 'min(820px, calc(100vw - 40px))',
+        paddingLeft: narrow ? 'env(safe-area-inset-left)' : undefined,
+        paddingRight: narrow ? 'env(safe-area-inset-right)' : undefined,
       }}
     >
       <form
         onSubmit={submitSearch}
         style={{
           display: 'grid',
-          gridTemplateColumns: '1fr 1fr auto',
+          gridTemplateColumns: narrow ? '1fr' : '1fr 1fr auto',
           gap: 8,
           background: 'rgba(17,24,39,0.88)',
           border: '1px solid var(--color-border)',
           backdropFilter: 'blur(6px)',
           borderRadius: 10,
-          padding: 8,
+          padding: narrow ? 10 : 8,
         }}
       >
         <AirportAutocompleteInput
@@ -190,7 +194,7 @@ export default function RouteSearchBar() {
           type="submit"
           disabled={isSearching}
           style={{
-            padding: '0 14px',
+            padding: narrow ? '10px 14px' : '0 14px',
             borderRadius: 8,
             border: '1px solid #2563eb',
             background: isSearching ? '#1d4ed8a0' : '#2563eb',
@@ -198,6 +202,7 @@ export default function RouteSearchBar() {
             fontWeight: 600,
             cursor: isSearching ? 'default' : 'pointer',
             minHeight: 38,
+            width: narrow ? '100%' : undefined,
           }}
         >
           {isSearching ? 'Searching...' : 'Search route'}

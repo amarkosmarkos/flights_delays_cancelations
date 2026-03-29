@@ -65,6 +65,22 @@ fi
 echo "==> Training ML models..."
 python -m scripts.train_models || echo "WARNING: Model training failed. Predictions won't work until retrain."
 
+# ── Compute airport/route aggregates (needed for delay colors on globe) ──
+echo "==> Computing aggregates..."
+python -c "
+import asyncio
+from app.database import async_session_factory, engine
+from app.services.aggregator import compute_airport_aggregates, compute_route_aggregates
+
+async def run():
+    async with async_session_factory() as db:
+        await compute_airport_aggregates(db)
+        await compute_route_aggregates(db)
+    await engine.dispose()
+
+asyncio.run(run())
+" || echo "WARNING: Aggregate computation failed. Airports will show without delay colors until first hourly run."
+
 # ── Start API server ─────────────────────────────────────────────────
 echo "==> Starting API server..."
 exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}

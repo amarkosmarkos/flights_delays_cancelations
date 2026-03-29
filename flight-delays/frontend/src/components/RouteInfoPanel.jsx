@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import useGlobeStore from '../stores/globeStore';
+import { useIsNarrowLayout } from '../hooks/useMediaQuery';
 import { formatPct } from '../utils/formatters';
 import { delayMinutesToColor } from '../utils/colorScale';
 
@@ -49,6 +50,7 @@ async function readApiError(res) {
 }
 
 export default function RouteInfoPanel() {
+  const narrow = useIsNarrowLayout();
   const route = useGlobeStore((s) => s.selectedRoute);
   const clearSelectedRoute = useGlobeStore((s) => s.clearSelectedRoute);
 
@@ -98,11 +100,16 @@ export default function RouteInfoPanel() {
     <div
       style={{
         position: 'absolute',
-        right: 16,
-        bottom: 16,
-        width: 380,
-        maxHeight: 'min(85vh, 640px)',
+        left: narrow ? 12 : undefined,
+        right: narrow ? 12 : 16,
+        bottom: narrow
+          ? 'calc(108px + env(safe-area-inset-bottom))'
+          : 16,
+        width: narrow ? 'auto' : 380,
+        maxWidth: narrow ? 'min(380px, calc(100vw - 24px))' : undefined,
+        maxHeight: narrow ? 'min(58vh, 520px)' : 'min(85vh, 640px)',
         overflowY: 'auto',
+        WebkitOverflowScrolling: 'touch',
         background: 'var(--color-surface)',
         border: '1px solid var(--color-border)',
         borderRadius: 12,
