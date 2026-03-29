@@ -1,5 +1,7 @@
 # 🌍 Flight Delays & Cancellations Predictor
 
+![Flight Delays Demo](flight-delays/auxiliary/screenshots/screen_recording_flight_delays.gif)
+
 > **Stop guessing at the gate. Start predicting with data.**
 
 Every day, thousands of flights are delayed or canceled, costing passengers time and airlines money. While we can't control the weather or air traffic, we *can* predict how they will affect your journey. 
