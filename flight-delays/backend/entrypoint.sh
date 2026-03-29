@@ -1,8 +1,42 @@
 #!/bin/sh
 set -e
 
+echo "==> Checking if database needs initial seeding..."
+FLIGHT_COUNT=$(python -c "
+import asyncio
+from app.database import engine, Base, async_session_factory
+from sqlalchemy import text
+
+async def check():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    async with async_session_factory() as db:
+        result = await db.execute(text('SELECT COUNT(*) FROM flights_raw'))
+        count = result.scalar()
+    await engine.dispose()
+    print(count)
+
+asyncio.run(check())
+" 2>/dev/null || echo "0")
+
+echo "    Found ${FLIGHT_COUNT} flights in database."
+
+if [ "$FLIGHT_COUNT" -lt 1000 ] 2>/dev/null; then
+    echo "==> Database is empty or insufficient data. Running initial seed..."
+
+    echo "  -> Seeding airports and routes from OpenFlights..."
+    python -m scripts.seed_openflights || echo "WARNING: OpenFlights seed failed."
+
+    echo "  -> Downloading BTS flight data (2024, months 1-2)..."
+    python -m scripts.seed_bts --year 2024 --months 1,2 || echo "WARNING: BTS seed failed."
+
+    echo "==> Seeding complete."
+else
+    echo "==> Database already has enough data, skipping seed."
+fi
+
 echo "==> Training ML models against database..."
-python -m scripts.train_models || echo "WARNING: Model training failed (DB might be empty). API will start but predictions won't work."
+python -m scripts.train_models || echo "WARNING: Model training failed. API will start but predictions won't work."
 
 echo "==> Starting API server..."
-exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
