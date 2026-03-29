@@ -18,6 +18,10 @@ asyncio.run(ping())
         echo "    Database is ready."
         break
     fi
+    if [ "$i" -eq "$MAX_RETRIES" ]; then
+        echo "    ERROR: Database not reachable after $MAX_RETRIES attempts. Aborting."
+        exit 1
+    fi
     echo "    Attempt $i/$MAX_RETRIES — database not ready, retrying in ${RETRY_INTERVAL}s..."
     sleep $RETRY_INTERVAL
 done
@@ -49,8 +53,8 @@ if [ "$FLIGHT_COUNT" -lt 1000 ] 2>/dev/null; then
     echo "  -> Seeding airports and routes from OpenFlights..."
     python -m scripts.seed_openflights || echo "WARNING: OpenFlights seed failed."
 
-    echo "  -> Downloading BTS flight data (2024, months 1-2)..."
-    python -m scripts.seed_bts --year 2024 --months 1,2 || echo "WARNING: BTS seed failed."
+    echo "  -> Downloading BTS flight data (2024-01, max 50000 rows)..."
+    python -m scripts.seed_bts --year 2024 --months 1 --max-rows 50000 || echo "WARNING: BTS seed failed."
 
     echo "==> Seeding complete."
 else

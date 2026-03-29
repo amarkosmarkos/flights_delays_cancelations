@@ -64,25 +64,14 @@ def _resolve_columns(df_columns: list[str]) -> dict[str, str]:
     return mapping
 
 
-async def load_bts_csv(filepath: str, db: AsyncSession) -> int:
-    """Parse a BTS On-Time Performance CSV and bulk insert into flights_raw."""
-    logger.info("Loading BTS CSV: %s", filepath)
-
-    try:
-        df = pd.read_csv(filepath, low_memory=False, encoding="latin-1")
-    except Exception as e:
-        logger.error("Failed to read BTS CSV %s: %s", filepath, e)
-        return 0
-
-    col_map = _resolve_columns(list(df.columns))
-    required = ["FL_DATE", "OP_CARRIER", "OP_CARRIER_FL_NUM", "ORIGIN", "DEST", "CRS_DEP_TIME"]
-    missing = [k for k in required if k not in col_map]
-    if missing:
-        logger.error("BTS CSV %s missing required columns: %s (available: %s)",
-                      filepath, missing, list(df.columns)[:20])
-        return 0
-
+def _process_chunk(df: pd.DataFrame, col_map: dict[str, str]) -> list[FlightRaw]:
+    """Convert a DataFrame chunk into a list of FlightRaw objects."""
     c = col_map
+    required = ["FL_DATE", "OP_CARRIER", "OP_CARRIER_FL_NUM", "ORIGIN", "DEST", "CRS_DEP_TIME"]
+    missing = [k for k in required if k not in c]
+    if missing:
+        return []
+
     dep_delay_col = c.get("DEP_DELAY")
     arr_delay_col = c.get("ARR_DELAY")
     cancelled_col = c.get("CANCELLED")
@@ -94,10 +83,7 @@ async def load_bts_csv(filepath: str, db: AsyncSession) -> int:
     if cancelled_col:
         df[cancelled_col] = df[cancelled_col].fillna(0)
 
-    count = 0
-    batch: list[FlightRaw] = []
-    batch_size = 10_000
-
+    flights: list[FlightRaw] = []
     for _, row in df.iterrows():
         fl_date = str(row[c["FL_DATE"]]).strip()
         carrier = str(row[c["OP_CARRIER"]]).strip()
@@ -120,7 +106,7 @@ async def load_bts_csv(filepath: str, db: AsyncSession) -> int:
         cancel_code = str(row[cancel_code_col]).strip() if cancel_code_col and pd.notna(row.get(cancel_code_col)) else ""
         cancel_reason = CANCELLATION_MAP.get(cancel_code)
 
-        flight = FlightRaw(
+        flights.append(FlightRaw(
             flight_number=flight_number,
             origin_iata=origin,
             destination_iata=dest,
@@ -134,18 +120,51 @@ async def load_bts_csv(filepath: str, db: AsyncSession) -> int:
             cancelled=cancelled,
             cancellation_reason=cancel_reason,
             data_source="BTS",
-        )
-        batch.append(flight)
-        count += 1
+        ))
 
-        if len(batch) >= batch_size:
-            db.add_all(batch)
+    return flights
+
+
+async def load_bts_csv(filepath: str, db: AsyncSession) -> int:
+    """Parse a BTS On-Time Performance CSV and bulk insert into flights_raw."""
+    return await load_bts_csv_chunked(filepath, db, max_rows=0)
+
+
+async def load_bts_csv_chunked(filepath: str, db: AsyncSession, max_rows: int = 0, chunk_size: int = 25_000) -> int:
+    """Parse a BTS CSV in chunks to keep memory usage low."""
+    logger.info("Loading BTS CSV (chunked): %s", filepath)
+
+    try:
+        reader = pd.read_csv(filepath, low_memory=False, encoding="latin-1", chunksize=chunk_size)
+    except Exception as e:
+        logger.error("Failed to read BTS CSV %s: %s", filepath, e)
+        return 0
+
+    col_map = None
+    total = 0
+
+    for chunk_df in reader:
+        if col_map is None:
+            col_map = _resolve_columns(list(chunk_df.columns))
+            required = ["FL_DATE", "OP_CARRIER", "OP_CARRIER_FL_NUM", "ORIGIN", "DEST", "CRS_DEP_TIME"]
+            missing = [k for k in required if k not in col_map]
+            if missing:
+                logger.error("BTS CSV %s missing required columns: %s", filepath, missing)
+                return 0
+
+        if max_rows > 0 and total >= max_rows:
+            break
+
+        rows_left = (max_rows - total) if max_rows > 0 else len(chunk_df)
+        if rows_left < len(chunk_df):
+            chunk_df = chunk_df.head(rows_left)
+
+        flights = _process_chunk(chunk_df, col_map)
+        if flights:
+            db.add_all(flights)
             await db.commit()
-            batch.clear()
+            total += len(flights)
+            logger.info("  Committed %d flights (total: %d)", len(flights), total)
 
-    if batch:
-        db.add_all(batch)
-        await db.commit()
-
-    logger.info("Loaded %d flights from BTS CSV", count)
-    return count
+    logger.info("Loaded %d flights from BTS CSV", total)
+    return total
