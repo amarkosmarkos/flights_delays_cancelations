@@ -1,6 +1,28 @@
 #!/bin/sh
 set -e
 
+# ── Wait for PostgreSQL to be ready ──────────────────────────────────
+echo "==> Waiting for database to accept connections..."
+MAX_RETRIES=30
+RETRY_INTERVAL=5
+for i in $(seq 1 $MAX_RETRIES); do
+    if python -c "
+import asyncio, sys
+from app.database import engine
+async def ping():
+    async with engine.connect() as conn:
+        await conn.execute(__import__('sqlalchemy').text('SELECT 1'))
+    await engine.dispose()
+asyncio.run(ping())
+" 2>/dev/null; then
+        echo "    Database is ready."
+        break
+    fi
+    echo "    Attempt $i/$MAX_RETRIES — database not ready, retrying in ${RETRY_INTERVAL}s..."
+    sleep $RETRY_INTERVAL
+done
+
+# ── Check if seeding is needed ───────────────────────────────────────
 echo "==> Checking if database needs initial seeding..."
 FLIGHT_COUNT=$(python -c "
 import asyncio
@@ -22,7 +44,7 @@ asyncio.run(check())
 echo "    Found ${FLIGHT_COUNT} flights in database."
 
 if [ "$FLIGHT_COUNT" -lt 1000 ] 2>/dev/null; then
-    echo "==> Database is empty or insufficient data. Running initial seed..."
+    echo "==> Database needs seeding. Running initial data load..."
 
     echo "  -> Seeding airports and routes from OpenFlights..."
     python -m scripts.seed_openflights || echo "WARNING: OpenFlights seed failed."
@@ -32,11 +54,13 @@ if [ "$FLIGHT_COUNT" -lt 1000 ] 2>/dev/null; then
 
     echo "==> Seeding complete."
 else
-    echo "==> Database already has enough data, skipping seed."
+    echo "==> Database already seeded, skipping."
 fi
 
-echo "==> Training ML models against database..."
-python -m scripts.train_models || echo "WARNING: Model training failed. API will start but predictions won't work."
+# ── Train ML models ──────────────────────────────────────────────────
+echo "==> Training ML models..."
+python -m scripts.train_models || echo "WARNING: Model training failed. Predictions won't work until retrain."
 
+# ── Start API server ─────────────────────────────────────────────────
 echo "==> Starting API server..."
 exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
