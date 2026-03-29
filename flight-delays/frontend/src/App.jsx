@@ -48,26 +48,30 @@ export default function App() {
         >
           Flight Delays & Cancellations
         </div>
-        <div
-          style={{
-            fontSize: narrow ? 10 : 11,
-            color: 'var(--color-text-dim)',
-            marginTop: narrow ? 3 : 2,
-            lineHeight: 1.35,
-          }}
-        >
-          Global real-time visualization with ML predictions
-        </div>
-        {airports.length > 0 && (
-          <div
-            style={{
-              fontSize: narrow ? 9 : 10,
-              color: 'var(--color-text-dim)',
-              marginTop: narrow ? 5 : 4,
-            }}
-          >
-            {airports.length} airports · {initialRoutes.length + selectedAirportRoutes.length} routes
-          </div>
+        {!narrow && (
+          <>
+            <div
+              style={{
+                fontSize: 11,
+                color: 'var(--color-text-dim)',
+                marginTop: 2,
+                lineHeight: 1.35,
+              }}
+            >
+              Global real-time visualization with ML predictions
+            </div>
+            {airports.length > 0 && (
+              <div
+                style={{
+                  fontSize: 10,
+                  color: 'var(--color-text-dim)',
+                  marginTop: 4,
+                }}
+              >
+                {airports.length} airports · {initialRoutes.length + selectedAirportRoutes.length} routes
+              </div>
+            )}
+          </>
         )}
       </div>
 

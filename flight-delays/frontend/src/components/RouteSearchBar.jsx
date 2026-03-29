@@ -150,7 +150,7 @@ export default function RouteSearchBar() {
     <div
       style={{
         position: 'absolute',
-        top: narrow ? 84 : 14,
+        top: narrow ? 52 : 14,
         left: '50%',
         transform: 'translateX(-50%)',
         zIndex: 240,

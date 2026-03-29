@@ -8,6 +8,16 @@ Every day, thousands of flights are delayed or canceled, costing passengers time
 
 This project is a **Global Real-Time Visualization and Machine Learning Prediction Platform** for flight delays and cancellations. It combines a stunning 3D interactive globe with a XGBoost predictive engine to give you unprecedented insights into global flight reliability.
 
+<div align="center">
+
+### 🌐 [Flight Delays & Cancellations — Global Visualization](https://considerate-grace-production-bd0f.up.railway.app/)
+
+*Explore the interactive 3D globe, routes, and ML predictions directly in your browser.*
+
+[![Live app on Railway](https://img.shields.io/badge/LIVE_APP-Open_in_browser-0B0D0E?style=for-the-badge&logo=railway&logoColor=white)](https://considerate-grace-production-bd0f.up.railway.app/)
+
+</div>
+
 ---
 
 ## ✨ Features
